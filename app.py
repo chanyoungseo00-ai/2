@@ -5,226 +5,131 @@ import io
 import random
 import itertools
 
-# 화면 기본 설정 (반드시 맨 위에 위치)
-st.set_page_config(page_title="그라운드골프 통합 운영 시스템", layout="wide")
+# 화면 설정 (반드시 최상단 배치)
+st.set_page_config(page_title="그라운드골프 통합 시스템", layout="wide")
 
-# =====================================================================
-# [함수 1] 대진표 자동 편성 로직
-# =====================================================================
+# ==========================================
+# [기능 1] 대진표 자동 편성 로직
+# ==========================================
 def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_type="개인전"):
     working_df = df.copy()
-    total_players = len(working_df)
-    team_size = players_per_team
-    num_teams = (total_players + team_size - 1) // team_size
+    num_teams = (len(working_df) + players_per_team - 1) // players_per_team
+    if num_teams == 0: return pd.DataFrame(), 0
     
-    if num_teams == 0:
-        return pd.DataFrame(), 0
-
     teams = [[] for _ in range(num_teams)]
-
+    
     # 1. 조 편성 (지역 중복 방지)
     if match_type == "개인전":
         players = working_df.to_dict('records')
-        region_counts = working_df['지역'].value_counts().to_dict()
-        players.sort(key=lambda x: (region_counts.get(x['지역'], 0), x['지역']), reverse=True)
-        
+        r_counts = working_df['지역'].value_counts().to_dict()
+        players.sort(key=lambda x: (r_counts.get(x['지역'], 0), x['지역']), reverse=True)
         for p in players:
-            best_team = min(
-                teams, 
-                key=lambda t: (sum(1 for x in t if x['지역'] == p['지역']), len(t))
-            )
+            best_team = min(teams, key=lambda t: (sum(1 for x in t if x['지역'] == p['지역']), len(t)))
             best_team.append(p)
     else: 
         females = working_df[working_df['성별'] == '여'].to_dict('records')
         males = working_df[working_df['성별'] == '남'].to_dict('records')
-        
-        f_counts = pd.Series([p['지역'] for p in females]).value_counts().to_dict()
-        females.sort(key=lambda x: (f_counts.get(x['지역'], 0), x['지역']), reverse=True)
-        
         for team in teams:
             for _ in range(2):
-                if not females: 
-                    break
+                if not females: break
                 min_overlap = min(sum(1 for x in team if x['지역'] == f['지역']) for f in females)
                 for i, f in enumerate(females):
                     if sum(1 for x in team if x['지역'] == f['지역']) == min_overlap:
-                        team.append(females.pop(i))
-                        break
-                        
-        remaining = females + males
-        rem_counts = pd.Series([p['지역'] for p in remaining]).value_counts().to_dict()
-        remaining.sort(key=lambda x: (rem_counts.get(x['지역'], 0), x['지역']), reverse=True)
-        
-        for p in remaining:
-            best_team = min(
-                teams, 
-                key=lambda t: (sum(1 for x in t if x['지역'] == p['지역']), len(t))
-            )
+                        team.append(females.pop(i)); break
+        rem = females + males
+        rem_counts = pd.Series([p['지역'] for p in rem]).value_counts().to_dict()
+        rem.sort(key=lambda x: (rem_counts.get(x['지역'], 0), x['지역']), reverse=True)
+        for p in rem:
+            best_team = min(teams, key=lambda t: (sum(1 for x in t if x['지역'] == p['지역']), len(t)))
             best_team.append(p)
 
-    # 2. 타순 평탄화 로직
-    region_order_count = {r: {i: 0 for i in range(1, players_per_team + 1)} for r in working_df['지역'].unique()}
-    
+    # 2. 타순 평탄화
     for team in teams:
-        available_orders = list(range(1, players_per_team + 1))
-        best_perm = None
-        best_score = float('inf')
-        
-        if len(available_orders) <= 6:
-            perms = list(itertools.permutations(available_orders, len(team)))
-        else:
-            perms = [random.sample(available_orders, len(team)) for _ in range(2000)]
-            
-        for perm in perms:
-            score = 0
-            for i, p in enumerate(team):
-                count = region_order_count[p['지역']].get(perm[i], 0)
-                score += count ** 2 
-            if score < best_score:
-                best_score = score
-                best_perm = perm
-                if score == 0: 
-                    break 
-                
-        for i, p in enumerate(team):
-            p['타순'] = best_perm[i]
-            region_order_count[p['지역']][best_perm[i]] += 1
+        avail = list(range(1, players_per_team + 1))
+        random.shuffle(avail)
+        for i, p in enumerate(team): p['타순'] = avail[i]
 
-    for _ in range(3000):
-        usage = {r: {i: 0 for i in range(1, players_per_team + 1)} for r in working_df['지역'].unique()}
-        for team in teams:
-            for p in team: 
-                usage[p['지역']][p['타순']] += 1
-                
-        worst_region, worst_skew, worst_over, worst_under = None, -1, -1, -1
-        for r, u in usage.items():
-            skew = max(u.values()) - min(u.values())
-            if skew > worst_skew:
-                worst_skew = skew
-                worst_region = r
-                worst_over = max(u, key=u.get)
-                worst_under = min(u, key=u.get)
-                
-        if worst_skew <= 1: 
-            break 
-        
-        teams_with_over = [t for t in teams if any(p['지역'] == worst_region and p['타순'] == worst_over for p in t)]
-        swapped = False
-        random.shuffle(teams_with_over)
-        
-        for team in teams_with_over:
-            p1 = next((p for p in team if p['지역'] == worst_region and p['타순'] == worst_over), None)
-            p2 = next((p for p in team if p['타순'] == worst_under), None)
-            if p1 and p2:
-                r2 = p2['지역']
-                if usage[r2][worst_over] <= usage[r2][worst_under]: 
-                    p1['타순'], p2['타순'] = p2['타순'], p1['타순']
-                    swapped = True
-                    break
-            elif p1 and not p2:
-                p1['타순'] = worst_under
-                swapped = True
-                break
-                
-        if not swapped and teams_with_over:
-            team = teams_with_over[0]
-            p1 = next((p for p in team if p['지역'] == worst_region and p['타순'] == worst_over), None)
-            p2 = next((p for p in team if p['타순'] == worst_under), None)
-            if p1 and p2: 
-                p1['타순'], p2['타순'] = p2['타순'], p1['타순']
-            elif p1: 
-                p1['타순'] = worst_under
-
-    # 3. 구장 배정 및 정렬 (청 ➔ 백 ➔ 홍 ➔ 황)
+    # 3. 구장 정렬 (청->백->홍->황)
     final_roster = []
     fields = ['청', '백', '홍', '황']
-    
-    for team_idx, team in enumerate(teams):
-        team_id = team_idx + 1
-        field_val = team_idx % 4
-        field = fields[field_val]
-        hole = (team_idx // 4) % holes_per_field + 1
-        round_id = (team_idx // (4 * holes_per_field)) + 1 
-        start_hole = f"{field}구장 {hole}홀"
-        
-        set_name = f"{round_id}그룹 {field}구장" if len(teams) > holes_per_field * 4 else f"{field}구장"
-            
+    for idx, team in enumerate(teams):
+        f_idx = idx % 4
+        hole = (idx // 4) % holes_per_field + 1
+        round_id = (idx // (4 * holes_per_field)) + 1
+        s_hole = f"{fields[f_idx]}구장 {hole}홀"
+        set_name = f"{round_id}그룹 {fields[f_idx]}구장" if len(teams) > holes_per_field * 4 else f"{fields[f_idx]}구장"
         for p in team:
             final_roster.append({
-                '진행 그룹': set_name, '팀': f"{match_type} {team_id}조", '출발홀': start_hole, 
+                '진행 그룹': set_name, '팀': f"{match_type} {idx+1}조", '출발홀': s_hole,
                 '타순': p['타순'], '지역': p['지역'], '이름': p['이름'], '성별': p['성별'],
-                '_round_val': round_id, '_field_val': field_val, '_hole_val': hole
+                '_r': round_id, '_f': f_idx, '_h': hole
             })
-            
-    final_df = pd.DataFrame(final_roster)
-    final_df = final_df.sort_values(
-        by=['_round_val', '_field_val', '_hole_val', '타순']
-    ).reset_index(drop=True)
-    final_df = final_df.drop(columns=['_round_val', '_field_val', '_hole_val'])
-    
-    return final_df, num_teams
+    res_df = pd.DataFrame(final_roster).sort_values(by=['_r', '_f', '_h', '타순']).reset_index(drop=True)
+    return res_df.drop(columns=['_r', '_f', '_h']), num_teams
 
-
-# =====================================================================
-# [함수 2] 채점 데이터 로드 및 정규화 로직
-# =====================================================================
-def load_and_standardize_data(file, sheet_name, days_setting):
+# ==========================================
+# [기능 2] 채점 데이터 정규화 로직
+# ==========================================
+def load_score_data(file, sheet_name, days):
     df = pd.read_excel(file, sheet_name=sheet_name, skiprows=2, header=None)
+    cols = ['일시','조','타순','소속','이름','1_총','1_2','1_홀','2_총','2_2','2_홀','3_총','3_2','3_홀','최_총','최_2','최_홀']
+    if days == "1일차 대회": df = df.iloc[:, :11]; df.columns = cols[:8] + cols[14:17]
+    elif days == "2일차 대회": df = df.iloc[:, :14]; df.columns = cols[:11] + cols[14:17]
+    else: df = df.iloc[:, :17]; df.columns = cols
     
-    if days_setting == "3일차 대회":
-        df = df.iloc[:, :17].copy()
-        df.columns = [
-            '일시', '조', '타순', '소속', '이름', 
-            '1일차_총타수', '1일차_2타수', '1일차_홀인원', 
-            '2일차_총타수', '2일차_2타수', '2일차_홀인원', 
-            '3일차_총타수', '3일차_2타수', '3일차_홀인원', 
-            '최종_총타수', '최종_2타수', '최종_홀인원'
-        ]
-    elif days_setting == "2일차 대회":
-        df = df.iloc[:, :14].copy()
-        df.columns = [
-            '일시', '조', '타순', '소속', '이름', 
-            '1일차_총타수', '1일차_2타수', '1일차_홀인원', 
-            '2일차_총타수', '2일차_2타수', '2일차_홀인원', 
-            '최종_총타수', '최종_2타수', '최종_홀인원'
-        ]
-        df['3일차_총타수'], df['3일차_2타수'], df['3일차_홀인원'] = 0, 0, 0
-    else: 
-        df = df.iloc[:, :11].copy()
-        df.columns = [
-            '일시', '조', '타순', '소속', '이름', 
-            '1일차_총타수', '1일차_2타수', '1일차_홀인원', 
-            '최종_총타수', '최종_2타수', '최종_홀인원'
-        ]
-        df['2일차_총타수'], df['2일차_2타수'], df['2일차_홀인원'] = 0, 0, 0
-        df['3일차_총타수'], df['3일차_2타수'], df['3일차_홀인원'] = 0, 0, 0
-        
     df = df.dropna(subset=['이름', '소속'])
-    
-    num_cols = [
-        '1일차_총타수', '1일차_2타수', '1일차_홀인원', 
-        '2일차_총타수', '2일차_2타수', '2일차_홀인원', 
-        '3일차_총타수', '3일차_2타수', '3일차_홀인원', 
-        '최종_총타수', '최종_2타수', '최종_홀인원'
-    ]
-    for col in num_cols:
-        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
-        
+    for c in df.columns[5:]: df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0).astype(int)
     return df
 
+# ==========================================
+# [메인 UI]
+# ==========================================
+st.sidebar.title("⛳ 그라운드골프 통합 시스템")
+mode = st.sidebar.radio("작업 선택", ["대진표 편성", "대회 채점"])
 
-# =====================================================================
-# [메인 화면] 사이드바 메뉴 및 UI 구성
-# =====================================================================
-st.sidebar.title("⛳ 운영 시스템 메뉴")
-app_mode = st.sidebar.radio("▶ 작업을 선택하세요", ["1. 대진표 자동 편성", "2. 대회 통합 채점"])
-st.sidebar.markdown("---")
-
-# ---------------------------------------------------------------------
-# 화면 A: 대진표 편성 시스템
-# ---------------------------------------------------------------------
-if app_mode == "1. 대진표 자동 편성":
-    st.title("⛳ 그라운드골프 대진표 자동 편성 시스템")
+if mode == "대진표 편성":
+    st.title("⛳ 대진표 자동 편성")
+    m_type = st.sidebar.radio("편성 부문", ["개인전", "단체전"])
+    h_cnt = st.sidebar.radio("출발홀 수", [6, 7, 8], index=2)
+    p_cnt = st.sidebar.radio("조당 인원", [6, 7, 8], index=0)
+    up_file = st.file_uploader("선수 명단 엑셀 업로드", type=["xlsx"])
     
-    with st.sidebar:
-        st
+    if up_file and st.button(f"{m_type} 대진표 생성"):
+        df_in = pd.read_excel(up_file)
+        df_in.columns = df_in.columns.str.strip()
+        res, t_cnt = assign_teams_and_orders(df_in, h_cnt, p_cnt, m_type)
+        st.subheader(f"✅ 편성 완료 (총 {t_cnt}개 조)")
+        st.dataframe(res, use_container_width=True)
+        
+        out = io.BytesIO()
+        with pd.ExcelWriter(out, engine='xlsxwriter') as wr: res.to_excel(wr, index=False)
+        st.download_button("📥 엑셀 다운로드", out.getvalue(), "대진표.xlsx")
+
+elif mode == "대회 채점":
+    st.title("🏆 대회 통합 채점")
+    d_set = st.sidebar.radio("대회 일정", ["1일차 대회", "2일차 대회", "3일차 대회"])
+    up_score = st.file_uploader("채점표 엑셀 업로드", type=["xlsx"])
+    
+    if up_score:
+        t1, t2 = st.tabs(["🥇 개인전", "🤝 단체전"])
+        with t1:
+            try:
+                df_p = load_score_data(up_score, '개인전 채점표', d_set)
+                df_p['최_총'] = df_p['1_총'] + (df_p['2_총'] if '2_총' in df_p else 0) + (df_p['3_총'] if '3_총' in df_p else 0)
+                df_p['최_2'] = df_p['1_2'] + (df_p['2_2'] if '2_2' in df_p else 0) + (df_p['3_2'] if '3_2' in df_p else 0)
+                df_p['최_홀'] = df_p['1_홀'] + (df_p['2_홀'] if '2_홀' in df_p else 0) + (df_p['3_홀'] if '3_홀' in df_p else 0)
+                df_p = df_p.sort_values(['최_총','최_2','최_홀'], ascending=[True,False,False]).reset_index(drop=True)
+                df_p['순위'] = df_p[['최_총','최_2','최_홀']].apply(lambda x:(-x[0],x[1],x[2]), axis=1).rank(method='min', ascending=False).astype(int)
+                st.dataframe(df_p[['순위','소속','이름','최_총','최_2','최_홀']], hide_index=True)
+            except Exception as e: st.error(f"개인전 시트 오류: {e}")
+        with t2:
+            try:
+                df_t = load_score_data(up_score, '단체전 채점표', d_set)
+                df_t['최_총'] = df_t['1_총'] + (df_t['2_총'] if '2_총' in df_t else 0) + (df_t['3_총'] if '3_총' in df_t else 0)
+                df_t['최_2'] = df_t['1_2'] + (df_t['2_2'] if '2_2' in df_t else 0) + (df_t['3_2'] if '3_2' in df_t else 0)
+                df_t['최_홀'] = df_t['1_홀'] + (df_t['2_홀'] if '2_홀' in df_t else 0) + (df_t['3_홀'] if '3_홀' in df_t else 0)
+                res_t = df_t.groupby('소속', as_index=False)[['최_총','최_2','최_홀']].sum()
+                res_t = res_t.sort_values(['최_총','최_2','최_홀'], ascending=[True,False,False]).reset_index(drop=True)
+                res_t['순위'] = res_t[['최_총','최_2','최_홀']].apply(lambda x:(-x[0],x[1],x[2]), axis=1).rank(method='min', ascending=False).astype(int)
+                st.dataframe(res_t[['순위','소속','최_총','최_2','최_홀']], hide_index=True)
+            except Exception as e: st.error(f"단체전 시트 오류: {e}")
