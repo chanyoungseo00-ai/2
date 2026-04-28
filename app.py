@@ -15,7 +15,6 @@ try:
     def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_type="개인전"):
         working_df = df.copy()
         
-        # 성별/지역 공백 제거
         working_df['성별'] = working_df['성별'].astype(str).str.strip().str[0] 
         working_df['지역'] = working_df['지역'].astype(str).str.strip()
         
@@ -24,6 +23,7 @@ try:
             return pd.DataFrame(), 0, {}
         
         teams = [[] for _ in range(num_teams)]
+        # 위원장님 요청: 다시 청, 백, 홍, 황으로 복구
         fields = ['청', '백', '홍', '황']
         
         if match_type == "개인전":
@@ -60,7 +60,6 @@ try:
                 )
                 best_team.append(p)
 
-        # 타순 평탄화 (지역별 타순 순환 배치)
         region_order_count = {
             r: {i: 0 for i in range(1, players_per_team + 1)} 
             for r in working_df['지역'].unique()
@@ -213,7 +212,8 @@ try:
     mode = st.sidebar.radio("작업 선택", ["대진표 편성", "대회 채점"])
 
     if mode == "대진표 편성":
-        st.title("⛳ 대진표 자동 편성 (청➔백➔홍➔황 정렬)")
+        # 위원장님 요청: 안내 문구 심플하게 변경
+        st.title("⛳ 대진표 자동 편성")
         m_type = st.sidebar.radio("편성 부문", ["개인전", "단체전"])
         h_cnt = st.sidebar.radio("출발홀 수", [6, 7, 8], index=2)
         p_cnt = st.sidebar.radio("조당 인원", [6, 7, 8], index=0)
