@@ -98,7 +98,6 @@ def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_typ
 def load_score_data(file, sheet_name, days):
     df = pd.read_excel(file, sheet_name=sheet_name, skiprows=2, header=None)
     
-    # 가로 잘림 방지를 위해 세로로 배열
     cols = [
         '일시', '조', '타순', '소속', '이름', 
         '1_총', '1_2', '1_홀', 
@@ -148,14 +147,20 @@ if mode == "대진표 편성":
     
     if up_file and st.button(f"{m_type} 대진표 생성"):
         df_in = pd.read_excel(up_file)
-        df_in.columns = df_in.columns.str.strip()
         
+        # [스마트 인식] 1행이 대회 제목인 경우 알아서 1줄을 건너뛰고 다시 읽음
+        if '이름' not in df_in.columns and '성명' not in df_in.columns:
+            df_in = pd.read_excel(up_file, skiprows=1)
+            
+        df_in.columns = df_in.columns.astype(str).str.strip()
         df_in = df_in.rename(columns={'소속': '지역', '성명': '이름'})
         
         if not {'지역', '이름', '성별'}.issubset(df_in.columns):
-            st.error("❌ 엑셀 파일 첫 줄에 [지역], [이름], [성별] 열이 있어야 합니다.")
+            st.error("❌ 엑셀 파일에 [지역], [이름], [성별] 열을 찾을 수 없습니다.")
         else:
-            df_in = df_in.dropna(subset=['지역', '이름', '성별']).copy()
+            # 엑셀 우측의 쓸데없는 통계표를 버리고 딱 필요한 3개 열만 추출
+            df_in = df_in.dropna(subset=['지역', '이름', '성별'])[['지역', '이름', '성별']].copy()
+            
             res, t_cnt = assign_teams_and_orders(df_in, h_cnt, p_cnt, m_type)
             st.subheader(f"✅ 편성 완료 (총 {t_cnt}개 조)")
             st.dataframe(res, use_container_width=True)
@@ -176,7 +181,6 @@ elif mode == "대회 채점":
             try:
                 df_p = load_score_data(up_score, '개인전 채점표', d_set)
                 
-                # 강제 합산 로직
                 df_p['최_총'] = df_p['1_총'] + df_p['2_총'] + df_p['3_총']
                 df_p['최_2'] = df_p['1_2'] + df_p['2_2'] + df_p['3_2']
                 df_p['최_홀'] = df_p['1_홀'] + df_p['2_홀'] + df_p['3_홀']
