@@ -15,7 +15,7 @@ try:
     def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_type="개인전"):
         working_df = df.copy()
         
-        # 성별 칸에 띄어쓰기('여 ')나 다른 글자가 섞여 있으면 에러가 나므로 깔끔하게 정리
+        # 성별 칸에 띄어쓰기 섞임 방지
         working_df['성별'] = working_df['성별'].astype(str).str.strip().str[0] 
         working_df['지역'] = working_df['지역'].astype(str).str.strip()
         
@@ -90,7 +90,7 @@ try:
         return res_df.drop(columns=['_r', '_f', '_h']), num_teams, region_order_count
 
     # ==========================================
-    # [기능 2] 인쇄용 엑셀 출력 양식
+    # [기능 2] 인쇄용 대진표 엑셀 출력 양식
     # ==========================================
     def create_print_excel(df, match_type, holes_cnt):
         output = io.BytesIO()
@@ -139,7 +139,32 @@ try:
         return output.getvalue()
 
     # ==========================================
-    # [메인 화면]
+    # [기능 3] 채점 데이터 로드 및 정규화
+    # ==========================================
+    def load_score_data(file, sheet_name, days):
+        df = pd.read_excel(file, sheet_name=sheet_name, skiprows=2, header=None)
+        cols = ['일시', '조', '타순', '소속', '이름', '1_총', '1_2', '1_홀', '2_총', '2_2', '2_홀', '3_총', '3_2', '3_홀', '최_총', '최_2', '최_홀']
+        if days == "1일차 대회": 
+            df = df.iloc[:, :11].copy()
+            df.columns = cols[:8] + cols[14:17]
+            df['2_총'], df['2_2'], df['2_홀'] = 0, 0, 0
+            df['3_총'], df['3_2'], df['3_홀'] = 0, 0, 0
+        elif days == "2일차 대회": 
+            df = df.iloc[:, :14].copy()
+            df.columns = cols[:11] + cols[14:17]
+            df['3_총'], df['3_2'], df['3_홀'] = 0, 0, 0
+        else: 
+            df = df.iloc[:, :17].copy()
+            df.columns = cols
+            
+        df = df.dropna(subset=['이름', '소속'])
+        num_cols = ['1_총', '1_2', '1_홀', '2_총', '2_2', '2_홀', '3_총', '3_2', '3_홀', '최_총', '최_2', '최_홀']
+        for c in num_cols: 
+            df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0).astype(int)
+        return df
+
+    # ==========================================
+    # [메인 화면 UI]
     # ==========================================
     st.sidebar.title("⛳ 운영 통합 시스템")
     mode = st.sidebar.radio("작업 선택", ["대진표 편성", "대회 채점"])
@@ -183,10 +208,60 @@ try:
             except Exception as e:
                 st.error(f"엑셀 파일을 읽는 도중 문제가 발생했습니다: {e}")
 
+    # ===== [부활시킨 채점 기능] =====
     elif mode == "대회 채점":
-        st.title("🏆 대회 통합 채점")
-        st.info("현재 대진표 모드입니다. 채점 기능도 정상적으로 작동 대기 중입니다.")
+        st.title("🏆 대회 통합 채점 시스템")
+        d_set = st.sidebar.radio("대회 일정", ["1일차 대회", "2일차 대회", "3일차 대회"])
+        up_score = st.file_uploader("채점표 엑셀 업로드", type=["xlsx"])
         
-except Exception as e:
-    st.error(f"🚨 프로그램 구동 중 치명적인 에러가 발생했습니다: {e}")
-    st.code(traceback.format_exc())
+        if up_score:
+            t1, t2 = st.tabs(["🥇 개인전", "🤝 단체전"])
+            
+            # 개인전 채점
+            with t1:
+                try:
+                    df_p = load_score_data(up_score, '개인전 채점표', d_set)
+                    
+                    # 1,2,3일차 점수 강제 합산 보정
+                    df_p['최_총'] = df_p['1_총'] + df_p['2_총'] + df_p['3_총']
+                    df_p['최_2'] = df_p['1_2'] + df_p['2_2'] + df_p['3_2']
+                    df_p['최_홀'] = df_p['1_홀'] + df_p['2_홀'] + df_p['3_홀']
+                    
+                    # 순위 정렬
+                    df_p = df_p.sort_values(
+                        by=['최_총','최_2','최_홀'], 
+                        ascending=[True,False,False]
+                    ).reset_index(drop=True)
+                    
+                    df_p['순위'] = df_p[['최_총','최_2','최_홀']].apply(
+                        lambda x: (-x['최_총'], x['최_2'], x['최_홀']), axis=1
+                    ).rank(method='min', ascending=False).astype(int)
+                    
+                    st.subheader(f"🥇 개인전 순위표 ({d_set})")
+                    st.dataframe(df_p[['순위','소속','이름','최_총','최_2','최_홀']], hide_index=True)
+                except Exception as e: 
+                    st.error(f"개인전 시트에서 오류가 발생했습니다: {e}")
+                    
+            # 단체전 채점
+            with t2:
+                try:
+                    df_t = load_score_data(up_score, '단체전 채점표', d_set)
+                    
+                    df_t['최_총'] = df_t['1_총'] + df_t['2_총'] + df_t['3_총']
+                    df_t['최_2'] = df_t['1_2'] + df_t['2_2'] + df_t['3_2']
+                    df_t['최_홀'] = df_t['1_홀'] + df_t['2_홀'] + df_t['3_홀']
+                    
+                    # 팀별 점수 합산
+                    res_t = df_t.groupby('소속', as_index=False)[['최_총','최_2','최_홀']].sum()
+                    
+                    res_t = res_t.sort_values(
+                        by=['최_총','최_2','최_홀'], 
+                        ascending=[True,False,False]
+                    ).reset_index(drop=True)
+                    
+                    res_t['순위'] = res_t[['최_총','최_2','최_홀']].apply(
+                        lambda x: (-x['최_총'], x['최_2'], x['최_홀']), axis=1
+                    ).rank(method='min', ascending=False).astype(int)
+                    
+                    st.subheader(f"🤝 단체전 순위표 ({d_set})")
+                    st.dataframe(res_t[['순위','소속','최_총','최_2','최_홀']], hide_index=
