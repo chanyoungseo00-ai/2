@@ -15,7 +15,7 @@ try:
     def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_type="개인전"):
         working_df = df.copy()
         
-        # 성별 칸에 띄어쓰기 섞임 방지
+        # 성별/지역 공백 제거
         working_df['성별'] = working_df['성별'].astype(str).str.strip().str[0] 
         working_df['지역'] = working_df['지역'].astype(str).str.strip()
         
@@ -31,7 +31,10 @@ try:
             r_counts = working_df['지역'].value_counts().to_dict()
             players.sort(key=lambda x: (r_counts.get(x['지역'], 0), x['지역']), reverse=True)
             for p in players:
-                best_team = min(teams, key=lambda t: (sum(1 for x in t if x['지역'] == p['지역']), len(t)))
+                best_team = min(
+                    teams, 
+                    key=lambda t: (sum(1 for x in t if x['지역'] == p['지역']), len(t))
+                )
                 best_team.append(p)
         else: 
             females = working_df[working_df['성별'] == '여'].to_dict('records')
@@ -39,18 +42,29 @@ try:
             for team in teams:
                 for _ in range(2):
                     if not females: break
-                    min_overlap = min(sum(1 for x in team if x['지역'] == f['지역']) for f in females)
+                    min_overlap = min(
+                        sum(1 for x in team if x['지역'] == f['지역']) 
+                        for f in females
+                    )
                     for i, f in enumerate(females):
                         if sum(1 for x in team if x['지역'] == f['지역']) == min_overlap:
-                            team.append(females.pop(i)); break
+                            team.append(females.pop(i))
+                            break
             rem = females + males
             rem_counts = pd.Series([p['지역'] for p in rem]).value_counts().to_dict()
             rem.sort(key=lambda x: (rem_counts.get(x['지역'], 0), x['지역']), reverse=True)
             for p in rem:
-                best_team = min(teams, key=lambda t: (sum(1 for x in t if x['지역'] == p['지역']), len(t)))
+                best_team = min(
+                    teams, 
+                    key=lambda t: (sum(1 for x in t if x['지역'] == p['지역']), len(t))
+                )
                 best_team.append(p)
 
-        region_order_count = {r: {i: 0 for i in range(1, players_per_team + 1)} for r in working_df['지역'].unique()}
+        # 타순 평탄화 (지역별 타순 순환 배치)
+        region_order_count = {
+            r: {i: 0 for i in range(1, players_per_team + 1)} 
+            for r in working_df['지역'].unique()
+        }
         for team in teams:
             avail_orders = list(range(1, players_per_team + 1))
             best_perm = None
@@ -76,17 +90,30 @@ try:
             round_id = (idx // (4 * holes_per_field)) + 1
             
             s_hole = f"{field_name}구장 {hole}홀"
-            set_name = f"{round_id}그룹 {field_name}구장" if len(teams) > holes_per_field * 4 else f"{field_name}구장"
+            if len(teams) > holes_per_field * 4:
+                set_name = f"{round_id}그룹 {field_name}구장"
+            else:
+                set_name = f"{field_name}구장"
                 
             for p in team:
                 final_roster.append({
-                    '진행 그룹': set_name, '팀': f"{match_type} {idx+1}조", 
-                    '구장': field_name, '홀': hole, '타순': p['타순'], 
-                    '지역': p['지역'], '이름': p['이름'], '성별': p['성별'],
-                    '_r': round_id, '_f': f_idx, '_h': hole
+                    '진행 그룹': set_name, 
+                    '팀': f"{match_type} {idx+1}조", 
+                    '구장': field_name, 
+                    '홀': hole, 
+                    '타순': p['타순'], 
+                    '지역': p['지역'], 
+                    '이름': p['이름'], 
+                    '성별': p['성별'],
+                    '_r': round_id, 
+                    '_f': f_idx, 
+                    '_h': hole
                 })
                 
-        res_df = pd.DataFrame(final_roster).sort_values(by=['_r', '_f', '_h', '타순']).reset_index(drop=True)
+        res_df = pd.DataFrame(final_roster).sort_values(
+            by=['_r', '_f', '_h', '타순']
+        ).reset_index(drop=True)
+        
         return res_df.drop(columns=['_r', '_f', '_h']), num_teams, region_order_count
 
     # ==========================================
@@ -96,8 +123,12 @@ try:
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             workbook = writer.book
-            header_fmt = workbook.add_format({'bold': True, 'bg_color': '#D9EAD3', 'border': 1, 'align': 'center'})
-            cell_fmt = workbook.add_format({'border': 1, 'align': 'center'})
+            header_fmt = workbook.add_format({
+                'bold': True, 'bg_color': '#D9EAD3', 'border': 1, 'align': 'center'
+            })
+            cell_fmt = workbook.add_format({
+                'border': 1, 'align': 'center'
+            })
             
             for f_name in ['청', '백', '홍', '황']:
                 f_df = df[df['구장'] == f_name]
@@ -105,7 +136,10 @@ try:
                 
                 worksheet = workbook.add_worksheet(f"{f_name}구장 대진표")
                 worksheet.set_column('A:N', 10)
-                worksheet.write(0, 0, f"제18회 대한체육회장배 {match_type} 대진표 ({f_name}구장)", workbook.add_format({'bold': True, 'font_size': 14}))
+                
+                title_text = f"제18회 대한체육회장배 {match_type} 대진표 ({f_name}구장)"
+                title_fmt = workbook.add_format({'bold': True, 'font_size': 14})
+                worksheet.write(0, 0, title_text, title_fmt)
                 
                 row = 3
                 for h in range(1, holes_cnt + 1, 2):
@@ -143,7 +177,13 @@ try:
     # ==========================================
     def load_score_data(file, sheet_name, days):
         df = pd.read_excel(file, sheet_name=sheet_name, skiprows=2, header=None)
-        cols = ['일시', '조', '타순', '소속', '이름', '1_총', '1_2', '1_홀', '2_총', '2_2', '2_홀', '3_총', '3_2', '3_홀', '최_총', '최_2', '최_홀']
+        cols = [
+            '일시', '조', '타순', '소속', '이름', 
+            '1_총', '1_2', '1_홀', 
+            '2_총', '2_2', '2_홀', 
+            '3_총', '3_2', '3_홀', 
+            '최_총', '최_2', '최_홀'
+        ]
         if days == "1일차 대회": 
             df = df.iloc[:, :11].copy()
             df.columns = cols[:8] + cols[14:17]
@@ -158,7 +198,10 @@ try:
             df.columns = cols
             
         df = df.dropna(subset=['이름', '소속'])
-        num_cols = ['1_총', '1_2', '1_홀', '2_총', '2_2', '2_홀', '3_총', '3_2', '3_홀', '최_총', '최_2', '최_홀']
+        num_cols = [
+            '1_총', '1_2', '1_홀', '2_총', '2_2', '2_홀', 
+            '3_총', '3_2', '3_홀', '최_총', '최_2', '최_홀'
+        ]
         for c in num_cols: 
             df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0).astype(int)
         return df
@@ -187,10 +230,14 @@ try:
                 df_raw = df_raw.rename(columns={'소속': '지역', '성명': '이름'})
                 
                 if not {'지역', '이름', '성별'}.issubset(df_raw.columns):
-                    st.error("❌ 엑셀에 [지역], [이름], [성별] 열이 없습니다. 엑셀 파일을 다시 확인해 주세요.")
+                    st.error("❌ 엑셀에 [지역], [이름], [성별] 열이 없습니다.")
                 else:
-                    df_clean = df_raw.dropna(subset=['지역', '이름', '성별'])[['지역', '이름', '성별']].copy()
-                    res, t_cnt, order_stats = assign_teams_and_orders(df_clean, h_cnt, p_cnt, m_type)
+                    df_clean = df_raw.dropna(subset=['지역', '이름', '성별']).copy()
+                    df_clean = df_clean[['지역', '이름', '성별']]
+                    
+                    res, t_cnt, order_stats = assign_teams_and_orders(
+                        df_clean, h_cnt, p_cnt, m_type
+                    )
                     
                     st.subheader(f"✅ {m_type} 편성 완료 (총 {t_cnt}개 조)")
                     st.dataframe(res, use_container_width=True)
@@ -203,12 +250,15 @@ try:
                         st.dataframe(order_df, use_container_width=True)
                     
                     print_excel = create_print_excel(res, m_type, h_cnt)
-                    st.download_button("📥 인쇄용 공식 대진표 다운로드", print_excel, f"{m_type}_최종_대진표.xlsx")
+                    st.download_button(
+                        label="📥 인쇄용 공식 대진표 다운로드", 
+                        data=print_excel, 
+                        file_name=f"{m_type}_최종_대진표.xlsx"
+                    )
                     
             except Exception as e:
                 st.error(f"엑셀 파일을 읽는 도중 문제가 발생했습니다: {e}")
 
-    # ===== [부활시킨 채점 기능] =====
     elif mode == "대회 채점":
         st.title("🏆 대회 통합 채점 시스템")
         d_set = st.sidebar.radio("대회 일정", ["1일차 대회", "2일차 대회", "3일차 대회"])
@@ -217,17 +267,14 @@ try:
         if up_score:
             t1, t2 = st.tabs(["🥇 개인전", "🤝 단체전"])
             
-            # 개인전 채점
             with t1:
                 try:
                     df_p = load_score_data(up_score, '개인전 채점표', d_set)
                     
-                    # 1,2,3일차 점수 강제 합산 보정
                     df_p['최_총'] = df_p['1_총'] + df_p['2_총'] + df_p['3_총']
                     df_p['최_2'] = df_p['1_2'] + df_p['2_2'] + df_p['3_2']
                     df_p['최_홀'] = df_p['1_홀'] + df_p['2_홀'] + df_p['3_홀']
                     
-                    # 순위 정렬
                     df_p = df_p.sort_values(
                         by=['최_총','최_2','최_홀'], 
                         ascending=[True,False,False]
@@ -238,11 +285,17 @@ try:
                     ).rank(method='min', ascending=False).astype(int)
                     
                     st.subheader(f"🥇 개인전 순위표 ({d_set})")
-                    st.dataframe(df_p[['순위','소속','이름','최_총','최_2','최_홀']], hide_index=True)
+                    
+                    display_cols_p = [
+                        '순위', '소속', '이름', '최_총', '최_2', '최_홀'
+                    ]
+                    st.dataframe(
+                        df_p[display_cols_p], 
+                        hide_index=True
+                    )
                 except Exception as e: 
                     st.error(f"개인전 시트에서 오류가 발생했습니다: {e}")
                     
-            # 단체전 채점
             with t2:
                 try:
                     df_t = load_score_data(up_score, '단체전 채점표', d_set)
@@ -251,8 +304,9 @@ try:
                     df_t['최_2'] = df_t['1_2'] + df_t['2_2'] + df_t['3_2']
                     df_t['최_홀'] = df_t['1_홀'] + df_t['2_홀'] + df_t['3_홀']
                     
-                    # 팀별 점수 합산
-                    res_t = df_t.groupby('소속', as_index=False)[['최_총','최_2','최_홀']].sum()
+                    res_t = df_t.groupby('소속', as_index=False)[
+                        ['최_총','최_2','최_홀']
+                    ].sum()
                     
                     res_t = res_t.sort_values(
                         by=['최_총','최_2','최_홀'], 
@@ -264,4 +318,37 @@ try:
                     ).rank(method='min', ascending=False).astype(int)
                     
                     st.subheader(f"🤝 단체전 순위표 ({d_set})")
-                    st.dataframe(res_t[['순위','소속','최_총','최_2','최_홀']], hide_index=
+                    
+                    display_cols_t = [
+                        '순위', '소속', '최_총', '최_2', '최_홀'
+                    ]
+                    st.dataframe(
+                        res_t[display_cols_t], 
+                        hide_index=True
+                    )
+                except Exception as e: 
+                    st.error(f"단체전 시트에서 오류가 발생했습니다: {e}")
+            
+            if 'df_p' in locals() or 'res_t' in locals():
+                st.markdown("---")
+                out_score = io.BytesIO()
+                with pd.ExcelWriter(out_score, engine='xlsxwriter') as wr:
+                    if 'df_p' in locals(): 
+                        df_p.to_excel(
+                            wr, index=False, sheet_name='개인전_최종결과'
+                        )
+                    if 'res_t' in locals(): 
+                        res_t.to_excel(
+                            wr, index=False, sheet_name='단체전_최종결과'
+                        )
+                        
+                st.download_button(
+                    label=f"📥 {d_set} 최종 채점 결과 다운로드", 
+                    data=out_score.getvalue(), 
+                    file_name=f"최종_채점결과({d_set}).xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+
+except Exception as e:
+    st.error(f"🚨 프로그램 구동 중 치명적인 에러가 발생했습니다: {e}")
+    st.code(traceback.format_exc())
